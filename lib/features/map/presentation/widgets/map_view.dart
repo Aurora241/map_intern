@@ -108,6 +108,7 @@ class _MapViewState extends ConsumerState<MapView> {
         ),
         onMapCreated: _onMapCreated,
         onStyleLoadedCallback: _onStyleLoaded,
+        onCameraIdle: _onCameraIdle,
         // onMapClick removed — using Listener above instead (MapLibre's
         // onMapClick does not fire on all Android devices/renderers)
         myLocationEnabled: false,
@@ -125,6 +126,13 @@ class _MapViewState extends ConsumerState<MapView> {
         ref.read(mapControllerProvider.notifier).state = controller;
       }
     });
+  }
+
+  void _onCameraIdle() {
+    final zoom = _controller?.cameraPosition?.zoom;
+    if (zoom != null && mounted) {
+      ref.read(zoomLevelProvider.notifier).state = zoom;
+    }
   }
 
   Future<void> _onStyleLoaded() async {

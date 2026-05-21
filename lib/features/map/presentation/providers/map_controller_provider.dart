@@ -6,3 +6,6 @@ final mapControllerProvider =
 
 // True after onStyleLoaded + layer init completes
 final mapReadyProvider = StateProvider<bool>((ref) => false);
+
+// Current map zoom level — updated on every camera idle
+final zoomLevelProvider = StateProvider<double>((ref) => 5.5);

@@ -21,13 +21,20 @@ class MapPage extends ConsumerWidget {
           const MapView(),
           const MapLoadingOverlay(),
 
-          // Zoom controls
+          // Zoom controls + level indicator
           Positioned(
             right: 16,
             bottom: 160,
-            child: ZoomControls(
-              onZoomIn: () => _zoom(ref, 1),
-              onZoomOut: () => _zoom(ref, -1),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ZoomControls(
+                  onZoomIn: () => _zoom(ref, 1),
+                  onZoomOut: () => _zoom(ref, -1),
+                ),
+                const SizedBox(height: 4),
+                const _ZoomLabel(),
+              ],
             ),
           ),
 
@@ -59,5 +66,32 @@ class MapPage extends ConsumerWidget {
     } else {
       controller.animateCamera(CameraUpdate.zoomOut());
     }
+  }
+}
+
+class _ZoomLabel extends ConsumerWidget {
+  const _ZoomLabel();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final zoom = ref.watch(zoomLevelProvider);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 3,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Text(
+        'z ${zoom.toStringAsFixed(1)}',
+        style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+      ),
+    );
   }
 }

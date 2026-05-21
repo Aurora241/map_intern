@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart';
 import '../../../../core/constants/map_constants.dart';
+import '../../../../core/utils/geo_calculator.dart';
 import '../providers/map_controller_provider.dart';
 import '../providers/map_tool_provider.dart';
 import '../providers/ruler_provider.dart';
@@ -22,6 +23,7 @@ class MapView extends ConsumerStatefulWidget {
 class _MapViewState extends ConsumerState<MapView> {
   MapLibreMapController? _controller;
   bool _mapReady = false;
+  bool _provinceLayerReady = false;
 
   @override
   void dispose() {
@@ -39,6 +41,17 @@ class _MapViewState extends ConsumerState<MapView> {
     });
     ref.listen(directionProvider, (prev, next) {
       if (_mapReady) _updateDirectionLayer(next);
+    });
+    ref.listen(activeToolProvider, (prev, next) {
+      if (next != MapTool.none && _provinceLayerReady && _controller != null) {
+        _controller!
+            .setGeoJsonSource(
+              MapConstants.provinceSelectedSourceId,
+              {'type': 'FeatureCollection', 'features': []},
+            )
+            .catchError((_) {});
+        ref.read(selectedProvinceProvider.notifier).clear();
+      }
     });
 
     return MapLibreMap(
@@ -68,16 +81,39 @@ class _MapViewState extends ConsumerState<MapView> {
 
   Future<void> _onStyleLoaded() async {
     if (_controller == null) return;
-    await _initLayers();
-    setState(() => _mapReady = true);
+    try {
+      await _initLayers();
+    } catch (e) {
+      debugPrint('Layer init error: $e');
+    } finally {
+      if (mounted) setState(() => _mapReady = true);
+    }
   }
 
   Future<void> _initLayers() async {
-    await _loadProvinces();
-    await _initProvinceHighlightLayer();
-    await _initRulerLayers();
-    await _initPolygonLayers();
-    await _initDirectionLayers();
+    // Each group is independent — one failure must not block the others
+    try {
+      await _initRulerLayers();
+    } catch (e) {
+      debugPrint('Ruler init error: $e');
+    }
+    try {
+      await _initPolygonLayers();
+    } catch (e) {
+      debugPrint('Polygon init error: $e');
+    }
+    try {
+      await _initDirectionLayers();
+    } catch (e) {
+      debugPrint('Direction init error: $e');
+    }
+    try {
+      await _loadProvinces();
+      await _initProvinceHighlightLayer();
+      _provinceLayerReady = true;
+    } catch (e) {
+      debugPrint('Province init error: $e');
+    }
   }
 
   // ─── Ruler layers ───────────────────────────────────────────
@@ -108,6 +144,23 @@ class _MapViewState extends ConsumerState<MapView> {
         circleColor: '#FF7043',
         circleStrokeWidth: 2,
         circleStrokeColor: '#FFFFFF',
+      ),
+    );
+    await _controller!.addSource(
+      MapConstants.rulerLabelsSourceId,
+      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+    );
+    await _controller!.addSymbolLayer(
+      MapConstants.rulerLabelsSourceId,
+      MapConstants.rulerLabelsLayerId,
+      const SymbolLayerProperties(
+        textField: '{label}',
+        textSize: 11,
+        textColor: '#FF7043',
+        textHaloColor: '#FFFFFF',
+        textHaloWidth: 1.5,
+        textAllowOverlap: true,
+        textIgnorePlacement: true,
       ),
     );
   }
@@ -151,6 +204,29 @@ class _MapViewState extends ConsumerState<MapView> {
         MapConstants.rulerPointsSourceId, pointsGeoJson);
     _controller!.setGeoJsonSource(
         MapConstants.rulerLinesSourceId, linesGeoJson);
+
+    // Segment distance labels at midpoint of each segment
+    final labelFeatures = <Map<String, dynamic>>[];
+    for (int i = 0; i < state.points.length - 1; i++) {
+      final p1 = state.points[i];
+      final p2 = state.points[i + 1];
+      labelFeatures.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [
+            (p1.longitude + p2.longitude) / 2,
+            (p1.latitude + p2.latitude) / 2,
+          ],
+        },
+        'properties': {
+          'label': GeoCalculator.formatDistance(state.segmentDistances[i]),
+        },
+      });
+    }
+    _controller!.setGeoJsonSource(
+        MapConstants.rulerLabelsSourceId,
+        {'type': 'FeatureCollection', 'features': labelFeatures});
   }
 
   // ─── Polygon layers ─────────────────────────────────────────
@@ -188,6 +264,23 @@ class _MapViewState extends ConsumerState<MapView> {
         circleColor: '#7B1FA2',
         circleStrokeWidth: 2,
         circleStrokeColor: '#FFFFFF',
+      ),
+    );
+    await _controller!.addSource(
+      MapConstants.polygonLabelsSourceId,
+      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+    );
+    await _controller!.addSymbolLayer(
+      MapConstants.polygonLabelsSourceId,
+      MapConstants.polygonLabelsLayerId,
+      const SymbolLayerProperties(
+        textField: '{label}',
+        textSize: 11,
+        textColor: '#7B1FA2',
+        textHaloColor: '#FFFFFF',
+        textHaloWidth: 1.5,
+        textAllowOverlap: true,
+        textIgnorePlacement: true,
       ),
     );
   }
@@ -250,6 +343,47 @@ class _MapViewState extends ConsumerState<MapView> {
         MapConstants.polygonSourceId, polygonGeoJson);
     _controller!.setGeoJsonSource(
         MapConstants.polygonPointsSourceId, pointsGeoJson);
+
+    // Labels: segment distances at midpoints + area at centroid
+    final labelFeatures = <Map<String, dynamic>>[];
+    final verts = state.vertices;
+
+    // Segment labels
+    final edgeCount = state.isClosed ? verts.length : verts.length - 1;
+    for (int i = 0; i < edgeCount; i++) {
+      final p1 = verts[i];
+      final p2 = verts[(i + 1) % verts.length];
+      final dist = GeoCalculator.distanceMeters(p1, p2);
+      labelFeatures.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [
+            (p1.longitude + p2.longitude) / 2,
+            (p1.latitude + p2.latitude) / 2,
+          ],
+        },
+        'properties': {'label': GeoCalculator.formatDistance(dist)},
+      });
+    }
+
+    // Area label at centroid (only when closed)
+    if (state.isClosed && state.areaSqMeters != null && verts.isNotEmpty) {
+      final centLat = verts.map((p) => p.latitude).reduce((a, b) => a + b) / verts.length;
+      final centLng = verts.map((p) => p.longitude).reduce((a, b) => a + b) / verts.length;
+      labelFeatures.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [centLng, centLat],
+        },
+        'properties': {'label': GeoCalculator.formatArea(state.areaSqMeters!)},
+      });
+    }
+
+    _controller!.setGeoJsonSource(
+        MapConstants.polygonLabelsSourceId,
+        {'type': 'FeatureCollection', 'features': labelFeatures});
   }
 
   // ─── Direction layers ────────────────────────────────────────
@@ -283,20 +417,28 @@ class _MapViewState extends ConsumerState<MapView> {
         lineJoin: 'round',
       ),
     );
+    // Two separate layers avoid match-expression compatibility issues
     await _controller!.addCircleLayer(
       MapConstants.waypointSourceId,
-      MapConstants.waypointLayerId,
+      '${MapConstants.waypointLayerId}-origin',
       const CircleLayerProperties(
         circleRadius: 8,
-        circleColor: [
-          'match',
-          ['get', 'type'],
-          'origin', '#4CAF50',
-          '#F44336',
-        ],
+        circleColor: '#4CAF50',
         circleStrokeWidth: 2.5,
         circleStrokeColor: '#FFFFFF',
       ),
+      filter: ['==', 'type', 'origin'],
+    );
+    await _controller!.addCircleLayer(
+      MapConstants.waypointSourceId,
+      '${MapConstants.waypointLayerId}-dest',
+      const CircleLayerProperties(
+        circleRadius: 8,
+        circleColor: '#F44336',
+        circleStrokeWidth: 2.5,
+        circleStrokeColor: '#FFFFFF',
+      ),
+      filter: ['==', 'type', 'destination'],
     );
   }
 
@@ -478,9 +620,12 @@ class _MapViewState extends ConsumerState<MapView> {
       }
 
       final feature = features.first;
-      final props = feature['properties'] as Map<String, dynamic>?;
-      final name = props?['NAME_1'] as String? ??
-          props?['name'] as String? ??
+      final rawProps = feature['properties'];
+      final props = rawProps is Map
+          ? rawProps.map((k, v) => MapEntry(k.toString(), v))
+          : <String, dynamic>{};
+      final name = props['NAME_1']?.toString() ??
+          props['name']?.toString() ??
           'Tỉnh không xác định';
 
       ref.read(selectedProvinceProvider.notifier).select(name);

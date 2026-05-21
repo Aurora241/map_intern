@@ -19,12 +19,16 @@ class MapConstants {
   static const String rulerLinesSourceId = 'ruler-lines-source';
   static const String rulerPointsLayerId = 'ruler-points-layer';
   static const String rulerLinesLayerId = 'ruler-lines-layer';
+  static const String rulerLabelsSourceId = 'ruler-labels-source';
+  static const String rulerLabelsLayerId = 'ruler-labels-layer';
 
   static const String polygonSourceId = 'polygon-source';
   static const String polygonFillLayerId = 'polygon-fill-layer';
   static const String polygonLineLayerId = 'polygon-line-layer';
   static const String polygonPointsSourceId = 'polygon-points-source';
   static const String polygonPointsLayerId = 'polygon-points-layer';
+  static const String polygonLabelsSourceId = 'polygon-labels-source';
+  static const String polygonLabelsLayerId = 'polygon-labels-layer';
 
   static const String routeSourceId = 'route-source';
   static const String routeLineLayerId = 'route-line-layer';

@@ -82,15 +82,36 @@ class DirectionNotifier extends StateNotifier<DirectionState> {
   }
 
   Future<void> _fetchRoute(LatLng origin, LatLng dest) async {
-    state = state.copyWith(status: DirectionStatus.loading);
+    state = DirectionState(
+      status: DirectionStatus.loading,
+      origin: state.origin,
+      destination: state.destination,
+    );
     final (route, failure) = await _getRoute(origin, dest);
 
     if (failure != null) {
-      state = state.copyWith(status: DirectionStatus.error, failure: failure);
+      state = DirectionState(
+        status: DirectionStatus.error,
+        origin: state.origin,
+        destination: state.destination,
+        failure: failure,
+        // route intentionally null — clears old route from map
+      );
       return;
     }
     if (route == null) return;
-    state = state.copyWith(status: DirectionStatus.loaded, route: route);
+    state = DirectionState(
+      status: DirectionStatus.loaded,
+      origin: state.origin,
+      destination: state.destination,
+      route: route,
+      // failure intentionally null
+    );
+  }
+
+  void retry() {
+    if (state.origin == null || state.destination == null) return;
+    _fetchRoute(state.origin!, state.destination!);
   }
 
   void swapWaypoints() {

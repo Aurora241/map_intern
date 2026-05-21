@@ -123,6 +123,18 @@ class DirectionPanel extends ConsumerWidget {
                               color: Colors.red, fontSize: 13),
                         ),
                       ),
+                      TextButton.icon(
+                        onPressed: () =>
+                            ref.read(directionProvider.notifier).retry(),
+                        icon: const Icon(Icons.refresh, size: 14),
+                        label: const Text('Thử lại', style: TextStyle(fontSize: 13)),
+                        style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFF1565C0),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
                     ],
                   ),
                 ),

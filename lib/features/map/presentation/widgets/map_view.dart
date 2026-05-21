@@ -10,6 +10,7 @@ import '../providers/map_tool_provider.dart';
 import '../providers/ruler_provider.dart';
 import '../providers/polygon_provider.dart';
 import '../providers/direction_provider.dart';
+import '../providers/province_provider.dart';
 
 class MapView extends ConsumerStatefulWidget {
   const MapView({super.key});
@@ -72,10 +73,11 @@ class _MapViewState extends ConsumerState<MapView> {
   }
 
   Future<void> _initLayers() async {
+    await _loadProvinces();
+    await _initProvinceHighlightLayer();
     await _initRulerLayers();
     await _initPolygonLayers();
     await _initDirectionLayers();
-    await _loadProvinces();
   }
 
   // ─── Ruler layers ───────────────────────────────────────────
@@ -379,6 +381,33 @@ class _MapViewState extends ConsumerState<MapView> {
     );
   }
 
+  // ─── Province highlight layer ────────────────────────────────
+
+  Future<void> _initProvinceHighlightLayer() async {
+    await _controller!.addSource(
+      MapConstants.provinceSelectedSourceId,
+      const GeojsonSourceProperties(
+          data: '{"type":"FeatureCollection","features":[]}'),
+    );
+    await _controller!.addFillLayer(
+      MapConstants.provinceSelectedSourceId,
+      MapConstants.provinceSelectedFillLayerId,
+      const FillLayerProperties(
+        fillColor: '#FF5722',
+        fillOpacity: 0.3,
+      ),
+    );
+    await _controller!.addLineLayer(
+      MapConstants.provinceSelectedSourceId,
+      MapConstants.provinceSelectedLineLayerId,
+      const LineLayerProperties(
+        lineColor: '#BF360C',
+        lineWidth: 2,
+        lineOpacity: 0.9,
+      ),
+    );
+  }
+
   // ─── Province boundary layer ─────────────────────────────────
 
   Future<void> _loadProvinces() async {
@@ -416,7 +445,6 @@ class _MapViewState extends ConsumerState<MapView> {
 
   void _onMapTap(Point<double> point, LatLng coordinates) {
     final activeTool = ref.read(activeToolProvider);
-    // Convert maplibre LatLng → latlong2 LatLng for domain layer
     final latLng = ll.LatLng(coordinates.latitude, coordinates.longitude);
 
     switch (activeTool) {
@@ -427,7 +455,41 @@ class _MapViewState extends ConsumerState<MapView> {
       case MapTool.direction:
         ref.read(directionProvider.notifier).onMapTap(latLng);
       case MapTool.none:
-        break;
+        _queryProvince(point);
+    }
+  }
+
+  Future<void> _queryProvince(Point<double> point) async {
+    if (_controller == null) return;
+    try {
+      final features = await _controller!.queryRenderedFeatures(
+        point,
+        [MapConstants.provincesFillLayerId],
+        null,
+      );
+
+      if (features.isEmpty) {
+        ref.read(selectedProvinceProvider.notifier).clear();
+        await _controller!.setGeoJsonSource(
+          MapConstants.provinceSelectedSourceId,
+          {'type': 'FeatureCollection', 'features': []},
+        );
+        return;
+      }
+
+      final feature = features.first;
+      final props = feature['properties'] as Map<String, dynamic>?;
+      final name = props?['NAME_1'] as String? ??
+          props?['name'] as String? ??
+          'Tỉnh không xác định';
+
+      ref.read(selectedProvinceProvider.notifier).select(name);
+      await _controller!.setGeoJsonSource(
+        MapConstants.provinceSelectedSourceId,
+        {'type': 'FeatureCollection', 'features': [feature]},
+      );
+    } catch (e) {
+      debugPrint('Province query error: $e');
     }
   }
 }

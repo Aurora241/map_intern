@@ -7,6 +7,7 @@ import '../widgets/tool_panel.dart';
 import '../widgets/measurement_card.dart';
 import '../widgets/direction_panel.dart';
 import '../widgets/zoom_controls.dart';
+import '../widgets/province_card.dart';
 
 class MapPage extends ConsumerWidget {
   const MapPage({super.key});
@@ -38,6 +39,7 @@ class MapPage extends ConsumerWidget {
               children: const [
                 DirectionPanel(),
                 MeasurementCard(),
+                ProvinceCard(),
               ],
             ),
           ),

@@ -8,6 +8,7 @@ import '../widgets/measurement_card.dart';
 import '../widgets/direction_panel.dart';
 import '../widgets/zoom_controls.dart';
 import '../widgets/province_card.dart';
+import '../widgets/map_loading_overlay.dart';
 
 class MapPage extends ConsumerWidget {
   const MapPage({super.key});
@@ -18,6 +19,7 @@ class MapPage extends ConsumerWidget {
       body: Stack(
         children: [
           const MapView(),
+          const MapLoadingOverlay(),
 
           // Zoom controls
           Positioned(

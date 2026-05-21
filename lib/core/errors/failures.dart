@@ -22,3 +22,14 @@ class ServerFailure extends Failure {
 class ParseFailure extends Failure {
   const ParseFailure([super.message = 'Lỗi xử lý dữ liệu']);
 }
+
+class RouteOutsideVietnamFailure extends Failure {
+  const RouteOutsideVietnamFailure(
+      [super.message =
+          'Không tìm được đường trong lãnh thổ Việt Nam.\nHãy chọn lại điểm xuất phát hoặc điểm đến.']);
+}
+
+class PointOutsideVietnamFailure extends Failure {
+  const PointOutsideVietnamFailure(
+      [super.message = 'Điểm chọn nằm ngoài lãnh thổ Việt Nam']);
+}

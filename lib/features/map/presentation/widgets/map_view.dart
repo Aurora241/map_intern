@@ -1,3 +1,4 @@
+import 'dart:convert' show jsonDecode;
 import 'dart:math' show Point;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,6 +26,12 @@ class _MapViewState extends ConsumerState<MapView> {
   bool _mapReady = false;
   bool _provinceLayerReady = false;
 
+  // Tap detection via raw pointer events (workaround for onMapClick not firing
+  // on some Android devices with Vulkan/Impeller rendering).
+  Offset? _tapDownOffset;
+  int? _tapDownMs;
+  double _devicePixelRatio = 1.0; // updated each build — logical→physical px
+
   @override
   void dispose() {
     _controller?.dispose();
@@ -33,6 +40,7 @@ class _MapViewState extends ConsumerState<MapView> {
 
   @override
   Widget build(BuildContext context) {
+    _devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
     ref.listen(rulerProvider, (prev, next) {
       if (_mapReady) _updateRulerLayer(next);
     });
@@ -54,18 +62,58 @@ class _MapViewState extends ConsumerState<MapView> {
       }
     });
 
-    return MapLibreMap(
-      styleString: MapConstants.tileStyleUrl,
-      initialCameraPosition: const CameraPosition(
-        target: LatLng(MapConstants.defaultLat, MapConstants.defaultLng), // maplibre LatLng
-        zoom: MapConstants.defaultZoom,
+    // Wrap map with Listener to detect taps via raw pointer events.
+    // onMapClick from MapLibreMap does not fire reliably on some Android
+    // devices (Vulkan/Impeller), so we implement our own tap detection.
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        _tapDownOffset = event.localPosition;
+        _tapDownMs = DateTime.now().millisecondsSinceEpoch;
+      },
+      onPointerUp: (event) async {
+        final down = _tapDownOffset;
+        final downMs = _tapDownMs;
+        _tapDownOffset = null;
+        _tapDownMs = null;
+
+        if (down == null || downMs == null) return;
+        if (!_mapReady || _controller == null) return;
+
+        final movement = (event.localPosition - down).distance;
+        final durationMs = DateTime.now().millisecondsSinceEpoch - downMs;
+
+        // Only treat as a tap if movement < 15px and duration < 400ms
+        if (movement >= 15 || durationMs >= 400) return;
+
+        // Convert logical pixels → physical pixels for MapLibre native
+        final dpr = _devicePixelRatio;
+        final point = Point<double>(
+          event.localPosition.dx * dpr,
+          event.localPosition.dy * dpr,
+        );
+        try {
+          final coords = await _controller!.toLatLng(point);
+          debugPrint('[TAP] Listener tap: logical=(${event.localPosition.dx.toStringAsFixed(1)},${event.localPosition.dy.toStringAsFixed(1)}) dpr=$dpr → ${coords.latitude.toStringAsFixed(4)},${coords.longitude.toStringAsFixed(4)}');
+          if (mounted) await _onMapTap(point, coords);
+        } catch (e) {
+          debugPrint('[TAP] toLatLng error: $e');
+        }
+      },
+      child: MapLibreMap(
+        styleString: MapConstants.tileStyleUrl,
+        initialCameraPosition: const CameraPosition(
+          target: LatLng(MapConstants.defaultLat, MapConstants.defaultLng),
+          zoom: MapConstants.defaultZoom,
+        ),
+        onMapCreated: _onMapCreated,
+        onStyleLoadedCallback: _onStyleLoaded,
+        // onMapClick removed — using Listener above instead (MapLibre's
+        // onMapClick does not fire on all Android devices/renderers)
+        myLocationEnabled: false,
+        compassEnabled: true,
+        rotateGesturesEnabled: true,
       ),
-      onMapCreated: _onMapCreated,
-      onStyleLoadedCallback: _onStyleLoaded,
-      onMapClick: _onMapTap,
-      myLocationEnabled: false,
-      compassEnabled: true,
-      rotateGesturesEnabled: true,
     );
   }
 
@@ -80,52 +128,65 @@ class _MapViewState extends ConsumerState<MapView> {
   }
 
   Future<void> _onStyleLoaded() async {
+    debugPrint('[MAP] _onStyleLoaded called, controller=${_controller != null}');
     if (_controller == null) return;
     try {
       await _initLayers();
     } catch (e) {
-      debugPrint('Layer init error: $e');
+      debugPrint('[MAP] Layer init error: $e');
     } finally {
-      if (mounted) setState(() => _mapReady = true);
+      debugPrint('[MAP] _mapReady = true');
+      if (mounted) {
+        setState(() => _mapReady = true);
+        ref.read(mapReadyProvider.notifier).state = true;
+      }
     }
   }
 
   Future<void> _initLayers() async {
-    // Each group is independent — one failure must not block the others
+    // Sequential init — MapLibre native expects style modifications on the
+    // main thread one at a time. Parallel addLayer calls cause race conditions
+    // that break the onMapClick callback registration.
+    debugPrint('[MAP] _initLayers start');
     try {
       await _initRulerLayers();
+      debugPrint('[MAP] Ruler layers OK');
     } catch (e) {
-      debugPrint('Ruler init error: $e');
+      debugPrint('[MAP] Ruler init error: $e');
     }
     try {
       await _initPolygonLayers();
+      debugPrint('[MAP] Polygon layers OK');
     } catch (e) {
-      debugPrint('Polygon init error: $e');
+      debugPrint('[MAP] Polygon init error: $e');
     }
     try {
       await _initDirectionLayers();
+      debugPrint('[MAP] Direction layers OK');
     } catch (e) {
-      debugPrint('Direction init error: $e');
+      debugPrint('[MAP] Direction init error: $e');
     }
     try {
       await _loadProvinces();
       await _initProvinceHighlightLayer();
       _provinceLayerReady = true;
+      debugPrint('[MAP] Province layers OK');
     } catch (e) {
-      debugPrint('Province init error: $e');
+      debugPrint('[MAP] Province init error: $e');
     }
+    debugPrint('[MAP] _initLayers done');
   }
 
   // ─── Ruler layers ───────────────────────────────────────────
 
   Future<void> _initRulerLayers() async {
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.rulerLinesSourceId,
-      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.rulerPointsSourceId,
-      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
     await _controller!.addLineLayer(
       MapConstants.rulerLinesSourceId,
@@ -133,7 +194,6 @@ class _MapViewState extends ConsumerState<MapView> {
       const LineLayerProperties(
         lineColor: '#FF7043',
         lineWidth: 2.5,
-        lineDasharray: [6, 3],
       ),
     );
     await _controller!.addCircleLayer(
@@ -146,9 +206,9 @@ class _MapViewState extends ConsumerState<MapView> {
         circleStrokeColor: '#FFFFFF',
       ),
     );
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.rulerLabelsSourceId,
-      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
     await _controller!.addSymbolLayer(
       MapConstants.rulerLabelsSourceId,
@@ -166,6 +226,7 @@ class _MapViewState extends ConsumerState<MapView> {
   }
 
   void _updateRulerLayer(RulerState state) {
+    debugPrint('[RULER] _updateRulerLayer called, points=${state.points.length}, mapReady=$_mapReady');
     if (_controller == null) return;
 
     final pointsGeoJson = {
@@ -232,13 +293,13 @@ class _MapViewState extends ConsumerState<MapView> {
   // ─── Polygon layers ─────────────────────────────────────────
 
   Future<void> _initPolygonLayers() async {
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.polygonSourceId,
-      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.polygonPointsSourceId,
-      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
     await _controller!.addFillLayer(
       MapConstants.polygonSourceId,
@@ -266,9 +327,9 @@ class _MapViewState extends ConsumerState<MapView> {
         circleStrokeColor: '#FFFFFF',
       ),
     );
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.polygonLabelsSourceId,
-      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
     await _controller!.addSymbolLayer(
       MapConstants.polygonLabelsSourceId,
@@ -389,13 +450,13 @@ class _MapViewState extends ConsumerState<MapView> {
   // ─── Direction layers ────────────────────────────────────────
 
   Future<void> _initDirectionLayers() async {
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.routeSourceId,
-      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.waypointSourceId,
-      const GeojsonSourceProperties(data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
     await _controller!.addLineLayer(
       MapConstants.routeSourceId,
@@ -499,16 +560,18 @@ class _MapViewState extends ConsumerState<MapView> {
   }
 
   void _fitBoundsToRoute(DirectionState state) {
-    if (state.origin == null || state.destination == null) return;
-    final minLat = [state.origin!.latitude, state.destination!.latitude]
-        .reduce((a, b) => a < b ? a : b);
-    final maxLat = [state.origin!.latitude, state.destination!.latitude]
-        .reduce((a, b) => a > b ? a : b);
-    final minLng = [state.origin!.longitude, state.destination!.longitude]
-        .reduce((a, b) => a < b ? a : b);
-    final maxLng = [state.origin!.longitude, state.destination!.longitude]
-        .reduce((a, b) => a > b ? a : b);
-
+    if (state.route == null || state.route!.geometry.isEmpty) return;
+    final coords = state.route!.geometry;
+    var minLat = coords.first.latitude;
+    var maxLat = coords.first.latitude;
+    var minLng = coords.first.longitude;
+    var maxLng = coords.first.longitude;
+    for (final p in coords) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
     _controller!.animateCamera(
       CameraUpdate.newLatLngBounds(
         LatLngBounds(
@@ -526,10 +589,9 @@ class _MapViewState extends ConsumerState<MapView> {
   // ─── Province highlight layer ────────────────────────────────
 
   Future<void> _initProvinceHighlightLayer() async {
-    await _controller!.addSource(
+    await _controller!.addGeoJsonSource(
       MapConstants.provinceSelectedSourceId,
-      const GeojsonSourceProperties(
-          data: '{"type":"FeatureCollection","features":[]}'),
+      const {'type': 'FeatureCollection', 'features': []},
     );
     await _controller!.addFillLayer(
       MapConstants.provinceSelectedSourceId,
@@ -556,9 +618,11 @@ class _MapViewState extends ConsumerState<MapView> {
     try {
       final String data =
           await rootBundle.loadString('assets/geo/vietnam_provinces.geojson');
-      await _controller!.addSource(
+      final Map<String, dynamic> geojsonMap =
+          jsonDecode(data) as Map<String, dynamic>;
+      await _controller!.addGeoJsonSource(
         MapConstants.provincesSourceId,
-        GeojsonSourceProperties(data: data),
+        geojsonMap,
       );
       await _controller!.addFillLayer(
         MapConstants.provincesSourceId,
@@ -585,14 +649,31 @@ class _MapViewState extends ConsumerState<MapView> {
 
   // ─── Map tap handler ─────────────────────────────────────────
 
-  void _onMapTap(Point<double> point, LatLng coordinates) {
+  Future<void> _onMapTap(Point<double> point, LatLng coordinates) async {
     final activeTool = ref.read(activeToolProvider);
+    debugPrint('[TAP] _onMapTap: tool=$activeTool lat=${coordinates.latitude.toStringAsFixed(4)} lng=${coordinates.longitude.toStringAsFixed(4)}');
     final latLng = ll.LatLng(coordinates.latitude, coordinates.longitude);
 
     switch (activeTool) {
       case MapTool.ruler:
+        debugPrint('[RULER] addPoint called');
         ref.read(rulerProvider.notifier).addPoint(latLng);
       case MapTool.polygon:
+        final polygonState = ref.read(polygonProvider);
+        if (polygonState.vertices.length >= 3 && !polygonState.isClosed) {
+          try {
+            final first = polygonState.vertices.first;
+            final firstScreen = await _controller!.toScreenLocation(
+              LatLng(first.latitude, first.longitude),
+            );
+            final dx = point.x - firstScreen.x;
+            final dy = point.y - firstScreen.y;
+            if (dx * dx + dy * dy < 30 * 30) {
+              ref.read(polygonProvider.notifier).closePolygon();
+              return;
+            }
+          } catch (_) {}
+        }
         ref.read(polygonProvider.notifier).addVertex(latLng);
       case MapTool.direction:
         ref.read(directionProvider.notifier).onMapTap(latLng);
@@ -624,7 +705,8 @@ class _MapViewState extends ConsumerState<MapView> {
       final props = rawProps is Map
           ? rawProps.map((k, v) => MapEntry(k.toString(), v))
           : <String, dynamic>{};
-      final name = props['NAME_1']?.toString() ??
+      final name = props['Name']?.toString() ??
+          props['NAME_1']?.toString() ??
           props['name']?.toString() ??
           'Tỉnh không xác định';
 

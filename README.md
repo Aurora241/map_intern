@@ -1,6 +1,6 @@
 # Map Intern
 
-Ứng dụng bản đồ Flutter, được xây dựng trong khuôn khổ bài đánh giá 6 ngày. Chạy trên Android (đã kiểm thử trên CPH2481, Android 15).
+Ứng dụng bản đồ Flutter, được xây dựng trong khuôn khổ bài đánh giá. Chạy trên Android (đã kiểm thử trên CPH2481, Android 15).
 
 ## Tính năng
 

@@ -26,6 +26,10 @@ class _MapViewState extends ConsumerState<MapView> {
   bool _mapReady = false;
   bool _provinceLayerReady = false;
 
+  // Province features cached for client-side point-in-polygon hit testing.
+  // queryRenderedFeatures is unreliable on Vulkan/Impeller (CPH2481).
+  List<Map<String, dynamic>> _provinceFeatures = [];
+
   // Tap detection via raw pointer events (workaround for onMapClick not firing
   // on some Android devices with Vulkan/Impeller rendering).
   Offset? _tapDownOffset;
@@ -95,7 +99,7 @@ class _MapViewState extends ConsumerState<MapView> {
         try {
           final coords = await _controller!.toLatLng(point);
           debugPrint('[TAP] Listener tap: logical=(${event.localPosition.dx.toStringAsFixed(1)},${event.localPosition.dy.toStringAsFixed(1)}) dpr=$dpr → ${coords.latitude.toStringAsFixed(4)},${coords.longitude.toStringAsFixed(4)}');
-          if (mounted) await _onMapTap(point, coords);
+          if (mounted) await _onMapTap(point, coords, ll.LatLng(coords.latitude, coords.longitude));
         } catch (e) {
           debugPrint('[TAP] toLatLng error: $e');
         }
@@ -628,6 +632,9 @@ class _MapViewState extends ConsumerState<MapView> {
           await rootBundle.loadString('assets/geo/vietnam_provinces.geojson');
       final Map<String, dynamic> geojsonMap =
           jsonDecode(data) as Map<String, dynamic>;
+      // Cache for client-side hit testing
+      _provinceFeatures = (geojsonMap['features'] as List)
+          .cast<Map<String, dynamic>>();
       await _controller!.addGeoJsonSource(
         MapConstants.provincesSourceId,
         geojsonMap,
@@ -649,6 +656,20 @@ class _MapViewState extends ConsumerState<MapView> {
           lineOpacity: 0.7,
         ),
       );
+      await _controller!.addSymbolLayer(
+        MapConstants.provincesSourceId,
+        MapConstants.provincesLabelsLayerId,
+        const SymbolLayerProperties(
+          textField: '{Name}',
+          textSize: 11,
+          textColor: '#1B5E20',
+          textHaloColor: '#FFFFFF',
+          textHaloWidth: 1.5,
+          textAllowOverlap: false,
+          textIgnorePlacement: false,
+          textMaxWidth: 8,
+        ),
+      );
     } catch (e) {
       // GeoJSON not yet added to assets — silently skip
       debugPrint('Province GeoJSON not found: $e');
@@ -657,10 +678,9 @@ class _MapViewState extends ConsumerState<MapView> {
 
   // ─── Map tap handler ─────────────────────────────────────────
 
-  Future<void> _onMapTap(Point<double> point, LatLng coordinates) async {
+  Future<void> _onMapTap(Point<double> point, LatLng coordinates, ll.LatLng latLng) async {
     final activeTool = ref.read(activeToolProvider);
     debugPrint('[TAP] _onMapTap: tool=$activeTool lat=${coordinates.latitude.toStringAsFixed(4)} lng=${coordinates.longitude.toStringAsFixed(4)}');
-    final latLng = ll.LatLng(coordinates.latitude, coordinates.longitude);
 
     switch (activeTool) {
       case MapTool.ruler:
@@ -674,8 +694,11 @@ class _MapViewState extends ConsumerState<MapView> {
             final firstScreen = await _controller!.toScreenLocation(
               LatLng(first.latitude, first.longitude),
             );
-            final dx = point.x - firstScreen.x;
-            final dy = point.y - firstScreen.y;
+            // toScreenLocation returns logical pixels; point is physical — convert
+            final logicalX = point.x / _devicePixelRatio;
+            final logicalY = point.y / _devicePixelRatio;
+            final dx = logicalX - firstScreen.x;
+            final dy = logicalY - firstScreen.y;
             if (dx * dx + dy * dy < 30 * 30) {
               ref.read(polygonProvider.notifier).closePolygon();
               return;
@@ -686,20 +709,23 @@ class _MapViewState extends ConsumerState<MapView> {
       case MapTool.direction:
         ref.read(directionProvider.notifier).onMapTap(latLng);
       case MapTool.none:
-        _queryProvince(point);
+        _queryProvince(latLng);
     }
   }
 
-  Future<void> _queryProvince(Point<double> point) async {
-    if (_controller == null) return;
-    try {
-      final features = await _controller!.queryRenderedFeatures(
-        point,
-        [MapConstants.provincesFillLayerId],
-        null,
-      );
+  // ─── Client-side province hit test ──────────────────────────
+  // queryRenderedFeatures is unreliable on Vulkan/Impeller (returns 0
+  // features regardless of coordinates). Use a ray-casting point-in-polygon
+  // test against the cached GeoJSON features instead.
 
-      if (features.isEmpty) {
+  Future<void> _queryProvince(ll.LatLng latLng) async {
+    if (_controller == null) return;
+    debugPrint('[PROVINCE] hit test at ${latLng.latitude.toStringAsFixed(4)},${latLng.longitude.toStringAsFixed(4)}');
+    try {
+      final hit = _findProvinceAt(latLng.latitude, latLng.longitude);
+      debugPrint('[PROVINCE] hit = ${hit?['properties']?['Name'] ?? 'none'}');
+
+      if (hit == null) {
         ref.read(selectedProvinceProvider.notifier).clear();
         await _controller!.setGeoJsonSource(
           MapConstants.provinceSelectedSourceId,
@@ -708,8 +734,7 @@ class _MapViewState extends ConsumerState<MapView> {
         return;
       }
 
-      final feature = features.first;
-      final rawProps = feature['properties'];
+      final rawProps = hit['properties'];
       final props = rawProps is Map
           ? rawProps.map((k, v) => MapEntry(k.toString(), v))
           : <String, dynamic>{};
@@ -721,10 +746,51 @@ class _MapViewState extends ConsumerState<MapView> {
       ref.read(selectedProvinceProvider.notifier).select(name);
       await _controller!.setGeoJsonSource(
         MapConstants.provinceSelectedSourceId,
-        {'type': 'FeatureCollection', 'features': [feature]},
+        {'type': 'FeatureCollection', 'features': [hit]},
       );
     } catch (e) {
       debugPrint('Province query error: $e');
     }
+  }
+
+  Map<String, dynamic>? _findProvinceAt(double lat, double lng) {
+    for (final feature in _provinceFeatures) {
+      if (_pointInFeature(lat, lng, feature)) return feature;
+    }
+    return null;
+  }
+
+  bool _pointInFeature(double lat, double lng, Map<String, dynamic> feature) {
+    final geometry = feature['geometry'] as Map<String, dynamic>?;
+    if (geometry == null) return false;
+    final type = geometry['type'] as String;
+    final coords = geometry['coordinates'] as List;
+    if (type == 'Polygon') {
+      return _pointInRing(lat, lng, coords[0] as List);
+    } else if (type == 'MultiPolygon') {
+      for (final polygon in coords) {
+        if (_pointInRing(lat, lng, (polygon as List)[0] as List)) return true;
+      }
+    }
+    return false;
+  }
+
+  // Ray-casting algorithm — O(n) per polygon ring.
+  bool _pointInRing(double lat, double lng, List ring) {
+    bool inside = false;
+    final n = ring.length;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+      final ci = ring[i] as List;
+      final cj = ring[j] as List;
+      final xi = (ci[0] as num).toDouble(); // longitude
+      final yi = (ci[1] as num).toDouble(); // latitude
+      final xj = (cj[0] as num).toDouble();
+      final yj = (cj[1] as num).toDouble();
+      if (((yi > lat) != (yj > lat)) &&
+          (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
   }
 }

@@ -11,6 +11,7 @@ class MapConstants {
   static const String provincesSourceId = 'provinces-source';
   static const String provincesFillLayerId = 'provinces-fill';
   static const String provincesLineLayerId = 'provinces-line';
+  static const String provincesLabelsLayerId = 'provinces-labels';
   static const String provinceSelectedSourceId = 'province-selected-source';
   static const String provinceSelectedFillLayerId = 'province-selected-fill';
   static const String provinceSelectedLineLayerId = 'province-selected-line';

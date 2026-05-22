@@ -1,60 +1,60 @@
 # Map Intern
 
-Flutter map application built as a 6-day assessment project. Runs on Android (tested on CPH2481, Android 15).
+Ứng dụng bản đồ Flutter, được xây dựng trong khuôn khổ bài đánh giá 6 ngày. Chạy trên Android (đã kiểm thử trên CPH2481, Android 15).
 
-## Features
+## Tính năng
 
-### Ruler
-Tap multiple points on the map to measure distance along a path. Each segment shows its distance inline; the card at the bottom displays the running total.
+### Thước đo (Ruler)
+Chạm nhiều điểm trên bản đồ để đo khoảng cách theo hành trình. Mỗi đoạn hiển thị độ dài trực tiếp trên bản đồ; thẻ phía dưới hiển thị tổng cộng dồn.
 
-- Haversine formula for accurate geodesic distances
-- Undo last point / clear all
-- Format: `m` under 1 km, `km` above
+- Công thức Haversine để tính khoảng cách trắc địa chính xác
+- Hoàn tác điểm cuối / xóa toàn bộ
+- Định dạng: `m` dưới 1 km, `km` từ 1 km trở lên
 
-### Polygon
-Draw a polygon by tapping vertices. Close it by tapping near the first point (< 30 px). The map shows edge lengths on each side and the total area at the centroid.
+### Đa giác (Polygon)
+Vẽ đa giác bằng cách chạm các đỉnh. Đóng vòng bằng cách chạm gần điểm đầu tiên (< 30 px). Bản đồ hiển thị độ dài mỗi cạnh và tổng diện tích tại tâm.
 
-- Spherical excess formula for area on a curved Earth
-- Undo vertex / clear
-- Format: `m²` under 1 km², `km²` above
+- Công thức spherical excess để tính diện tích trên mặt cầu Trái Đất
+- Hoàn tác đỉnh / xóa toàn bộ
+- Định dạng: `m²` dưới 1 km², `km²` từ 1 km² trở lên
 
-### Direction
-Tap origin then destination — the app fetches a driving route from OSRM and draws it on the map.
+### Chỉ đường (Direction)
+Chạm điểm xuất phát rồi điểm đích — ứng dụng lấy tuyến đường lái xe từ OSRM và vẽ lên bản đồ.
 
-- Via-point routing: 2 intermediate waypoints are inserted at 33 % and 67 % of the straight line, with longitudes clamped to keep the route inside Vietnam's road network through the narrow central waist (Quảng Bình, lat ≈ 16–17°)
-- Post-validation: every point in the returned geometry is checked against the Vietnamese border; routes that escape (e.g. through Laos or Cambodia) are rejected
-- Error states: no network, no route found, timeout, point outside Vietnam — each shown with a retry button
-- Swap origin ↔ destination in one tap
+- Định tuyến qua via-point: 2 điểm trung gian được chèn tại 33% và 67% đường thẳng, kinh độ được giới hạn để giữ tuyến đường trong mạng lưới đường bộ Việt Nam qua phần eo hẹp miền Trung (Quảng Bình, vĩ độ ≈ 16–17°)
+- Kiểm tra hậu kỳ: mọi điểm trong hình học trả về đều được kiểm tra với biên giới Việt Nam; các tuyến thoát ra ngoài (qua Lào hoặc Campuchia) bị từ chối
+- Các trạng thái lỗi: mất mạng, không tìm thấy tuyến, timeout, điểm ngoài Việt Nam — đều hiển thị nút thử lại
+- Đổi chiều xuất phát ↔ đích trong một chạm
 
-### Province Highlight
-Tap anywhere on the map (no tool active) to highlight the province under the finger and display its name.
+### Tô sáng tỉnh thành (Province Highlight)
+Chạm bất kỳ đâu trên bản đồ (khi không dùng tool nào) để tô sáng tỉnh thành tại vị trí đó và hiển thị tên.
 
-## Setup
+## Cài đặt
 
 ```bash
 flutter pub get
 flutter run
 ```
 
-Requires Android device or emulator with internet access. No API keys needed — map tiles are served by [OpenFreeMap](https://openfreemap.org) and routing by the public [OSRM](https://project-osrm.org) server.
+Yêu cầu thiết bị Android hoặc máy ảo có kết nối internet. Không cần API key — tile bản đồ được cung cấp bởi [OpenFreeMap](https://openfreemap.org) và định tuyến bởi máy chủ công cộng [OSRM](https://project-osrm.org).
 
-## Architecture
+## Kiến trúc
 
 ```
 lib/
   core/
     constants/   # MapConstants, ApiConstants
-    errors/      # Failure sealed class hierarchy
-    network/     # Dio client with timeouts
+    errors/      # Cây lớp Failure (sealed class)
+    network/     # Dio client với timeout
     utils/       # GeoCalculator (haversine, spherical excess)
   features/map/
     data/
-      datasources/  # OsrmDataSource — HTTP + Vietnam boundary logic
+      datasources/  # OsrmDataSource — HTTP + logic biên giới Việt Nam
       models/       # RouteModel (DTO)
       repositories/ # MapRepositoryImpl
     domain/
       entities/     # RouteEntity
-      repositories/ # MapRepository interface
+      repositories/ # Interface MapRepository
       usecases/     # GetRouteUseCase
     presentation/
       pages/        # MapPage — scaffold, stack layout
@@ -62,34 +62,34 @@ lib/
       widgets/      # MapView, tool panels, measurement cards, zoom controls
 ```
 
-State management: **Riverpod** (`StateNotifierProvider`).  
-Map rendering: **MapLibre GL** — GeoJSON sources updated in place; no layer teardown on state change.
+Quản lý state: **Riverpod** (`StateNotifierProvider`).  
+Render bản đồ: **MapLibre GL** — cập nhật GeoJSON source tại chỗ, không teardown layer khi state thay đổi.
 
-## Technical decisions
+## Quyết định kỹ thuật
 
-**MapLibre GL** over Google Maps / Mapbox — open source, no billing, works offline with custom tiles. The Flutter plugin wraps the native Android/iOS SDK via a platform view.
+**MapLibre GL** thay vì Google Maps / Mapbox — mã nguồn mở, miễn phí, hoạt động offline với tile tùy chỉnh. Plugin Flutter bọc native Android/iOS SDK qua platform view.
 
-**OpenFreeMap** for tiles — free, no key, global coverage, vector tiles served over HTTPS. Bright style chosen for readability.
+**OpenFreeMap** làm nguồn tile — miễn phí, không cần key, phủ sóng toàn cầu, vector tile qua HTTPS. Style Bright được chọn để dễ đọc.
 
-**OSRM public server** for routing — zero setup, adequate for demo. Limitation: shared infrastructure, no SLA. Production would use a self-hosted OSRM instance or a commercial routing API with a Vietnamese road profile.
+**OSRM public server** để định tuyến — không cần cấu hình, đủ dùng cho demo. Hạn chế: hạ tầng dùng chung, không có SLA. Môi trường sản xuất nên dùng OSRM tự host hoặc API định tuyến thương mại với hồ sơ đường bộ Việt Nam.
 
-**Haversine** for ruler/polygon distances — accurate to < 0.3 % for distances under 1000 km, sufficient for this use case. Vincenty would be more accurate at transcontinental scale.
+**Haversine** cho khoảng cách ruler/polygon — sai số < 0,3% với khoảng cách dưới 1000 km, đủ cho trường hợp này. Vincenty chính xác hơn ở quy mô liên lục địa.
 
-**Listener instead of `onMapClick`** — MapLibre's `onMapClick` callback does not fire reliably on some Android devices using the Vulkan renderer (confirmed on CPH2481, Android 15). Raw pointer events via Flutter's `Listener` widget work on all devices; tap is detected when movement < 15 px and duration < 400 ms.
+**Listener thay vì `onMapClick`** — callback `onMapClick` của MapLibre không kích hoạt ổn định trên một số thiết bị Android dùng Vulkan renderer (xác nhận trên CPH2481, Android 15). Raw pointer event qua widget `Listener` của Flutter hoạt động trên mọi thiết bị; tap được phát hiện khi di chuyển < 15 px và thời gian < 400 ms.
 
-**`localPosition × devicePixelRatio`** — Flutter's pointer events report logical pixels; MapLibre's `toLatLng()` expects physical pixels. Devices with high DPI (CPH2481: dpr = 3.0) placed dots at the wrong location without this conversion.
+**`localPosition × devicePixelRatio`** — pointer event của Flutter báo logical pixel; `toLatLng()` của MapLibre cần physical pixel. Thiết bị DPI cao (CPH2481: dpr = 3,0) sẽ đặt điểm sai vị trí nếu không quy đổi.
 
-## Limitations
+## Hạn chế
 
-- Routing uses the OSRM `driving` profile — travel time reflects car speeds, not motorcycle speeds. A motorcycle factor (~×1.3 duration) could be applied client-side.
-- No offline support — tiles and routing both require internet.
-- Self-intersecting polygons are accepted without warning; area calculation becomes unreliable in that case.
-- Province boundaries are simplified (≈ 5 %) for performance; boundary precision is ± a few hundred metres.
+- Định tuyến dùng hồ sơ `driving` của OSRM — thời gian di chuyển phản ánh tốc độ ô tô, không phải xe máy. Có thể áp hệ số xe máy (~×1,3 thời gian) phía client.
+- Không hỗ trợ offline — tile và định tuyến đều cần internet.
+- Đa giác tự giao được chấp nhận mà không cảnh báo; tính diện tích sẽ không chính xác trong trường hợp này.
+- Ranh giới tỉnh được đơn giản hóa (≈ 5%) để tối ưu hiệu năng; độ chính xác biên giới ± vài trăm mét.
 
-## If I had more time
+## Nếu có thêm thời gian
 
-- Self-hosted OSRM with a Vietnamese road profile tuned for motorcycle speeds
-- Geocoding search bar to set origin/destination by name
-- Offline tile cache for the Vietnam bounding box
-- GPX export for ruler paths and polygon areas
-- Unit test coverage for DirectionNotifier state machine
+- Tự host OSRM với hồ sơ đường bộ Việt Nam tối ưu cho tốc độ xe máy
+- Thanh tìm kiếm geocoding để đặt xuất phát/đích theo tên địa danh
+- Cache tile offline cho vùng bao phủ Việt Nam
+- Xuất GPX cho đường thước đo và diện tích đa giác
+- Kiểm thử đơn vị cho state machine của DirectionNotifier
